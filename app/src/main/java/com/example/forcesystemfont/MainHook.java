@@ -1,71 +1,46 @@
 package com.example.forcesystemfont;
 
 import android.graphics.Typeface;
-import de.robv.android.xposed.IXposedHookZygoteInit;
 import de.robv.android.xposed.IXposedHookLoadPackage;
-import de.robv.android.xposed.XC_MethodReplacement;
+import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
-import de.robv.android.xposed.callbacks.XC_InitPackageResources;
 
-public class MainHook implements IXposedHookZygoteInit, IXposedHookLoadPackage {
+public class MainHook implements IXposedHookLoadPackage {
 
     private static final String[] ICON_FONT_PATTERNS = {
         "material", "icon", "awesome", "ionicon",
         "symbol", "glyph", "weather", "feather"
     };
 
-    private boolean isIconFont(String path) {
-        if (path == null) return false;
-        String lower = path.toLowerCase();
-        for (String pattern : ICON_FONT_PATTERNS) {
-            if (lower.contains(pattern)) return true;
-        }
-        return false;
-    }
-
-    @Override
-    public void initZygote(StartupParam startupParam) throws Throwable {
-        // Hook at zygote level — applies to ALL processes before they start
-        XposedHelpers.findAndHookMethod(
-            "android.graphics.Typeface",
-            Typeface.class.getClassLoader(),
-            "createFromAsset",
-            android.content.res.AssetManager.class,
-            String.class,
-            new XC_MethodReplacement() {
-                @Override
-                protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
-                    String fontName = (String) param.args[1];
-                    if (isIconFont(fontName)) {
-                        return XposedBridge.invokeOriginalMethod(param.method, param.thisObject, param.args);
-                    }
-                    return Typeface.DEFAULT;
-                }
-            }
-        );
-
-        XposedHelpers.findAndHookMethod(
-            "android.graphics.Typeface",
-            Typeface.class.getClassLoader(),
-            "createFromFile",
-            String.class,
-            new XC_MethodReplacement() {
-                @Override
-                protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
-                    String path = (String) param.args[0];
-                    if (isIconFont(path)) {
-                        return XposedBridge.invokeOriginalMethod(param.method, param.thisObject, param.args);
-                    }
-                    return Typeface.DEFAULT;
-                }
-            }
-        );
+    private boolean isIconFont(Typeface tf) {
+        // Can't check name at this point so we skip null typefaces only
+        return tf == null;
     }
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // intentionally empty — hooks are in initZygote
+        XposedBridge.log("ForceSystemFont: hooked " + lpparam.packageName);
+
+        XposedHelpers.findAndHookMethod(
+            "android.graphics.Paint",
+            lpparam.classLoader,
+            "setTypeface",
+            Typeface.class,
+            new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    Typeface tf = (Typeface) param.args[0];
+                    if (tf != null && tf != Typeface.DEFAULT
+                            && tf != Typeface.DEFAULT_BOLD
+                            && tf != Typeface.MONOSPACE
+                            && tf != Typeface.SANS_SERIF
+                            && tf != Typeface.SERIF) {
+                        param.args[0] = Typeface.DEFAULT;
+                    }
+                }
+            }
+        );
     }
-}
+ }
