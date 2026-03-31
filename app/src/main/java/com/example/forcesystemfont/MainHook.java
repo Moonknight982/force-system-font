@@ -1,13 +1,15 @@
 package com.example.forcesystemfont;
 
 import android.graphics.Typeface;
+import de.robv.android.xposed.IXposedHookZygoteInit;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import de.robv.android.xposed.callbacks.XC_InitPackageResources;
 
-public class MainHook implements IXposedHookLoadPackage {
+public class MainHook implements IXposedHookZygoteInit, IXposedHookLoadPackage {
 
     private static final String[] ICON_FONT_PATTERNS = {
         "material", "icon", "awesome", "ionicon",
@@ -24,11 +26,11 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     @Override
-    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
-
+    public void initZygote(StartupParam startupParam) throws Throwable {
+        // Hook at zygote level — applies to ALL processes before they start
         XposedHelpers.findAndHookMethod(
             "android.graphics.Typeface",
-            ClassLoader.getSystemClassLoader(),
+            Typeface.class.getClassLoader(),
             "createFromAsset",
             android.content.res.AssetManager.class,
             String.class,
@@ -46,7 +48,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
         XposedHelpers.findAndHookMethod(
             "android.graphics.Typeface",
-            ClassLoader.getSystemClassLoader(),
+            Typeface.class.getClassLoader(),
             "createFromFile",
             String.class,
             new XC_MethodReplacement() {
@@ -60,5 +62,10 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             }
         );
+    }
+
+    @Override
+    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
+        // intentionally empty — hooks are in initZygote
     }
 }
