@@ -8,24 +8,10 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 public class MainHook implements IXposedHookLoadPackage {
 
-    // Add package names of apps you want to force system font
-    private static final String[] TARGET_PACKAGES = {
-        "com.example.targetapp1",
-        "com.example.targetapp2"
-    };
-
-    // Known icon font file name patterns — skip these
     private static final String[] ICON_FONT_PATTERNS = {
         "material", "icon", "awesome", "ionicon",
         "symbol", "glyph", "weather", "feather"
     };
-
-    private boolean isTargetPackage(String packageName) {
-        for (String pkg : TARGET_PACKAGES) {
-            if (pkg.equals(packageName)) return true;
-        }
-        return false;
-    }
 
     private boolean isIconFont(String path) {
         if (path == null) return false;
@@ -38,9 +24,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
-        if (!isTargetPackage(lpparam.packageName)) return;
 
-        // Hook createFromAsset
         XposedHelpers.findAndHookMethod(
             "android.graphics.Typeface",
             ClassLoader.getSystemClassLoader(),
@@ -59,7 +43,6 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         );
 
-        // Hook createFromFile
         XposedHelpers.findAndHookMethod(
             "android.graphics.Typeface",
             ClassLoader.getSystemClassLoader(),
