@@ -9,19 +9,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 public class MainHook implements IXposedHookLoadPackage {
 
-    private static final String[] ICON_FONT_PATTERNS = {
-        "material", "icon", "awesome", "ionicon",
-        "symbol", "glyph", "weather", "feather"
-    };
-
-    private boolean isIconFont(Typeface tf) {
-        // Can't check name at this point so we skip null typefaces only
-        return tf == null;
-    }
-
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        XposedBridge.log("ForceSystemFont: hooked " + lpparam.packageName);
 
         XposedHelpers.findAndHookMethod(
             "android.graphics.Paint",
@@ -32,12 +21,38 @@ public class MainHook implements IXposedHookLoadPackage {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                     Typeface tf = (Typeface) param.args[0];
-                    if (tf != null && tf != Typeface.DEFAULT
-                            && tf != Typeface.DEFAULT_BOLD
-                            && tf != Typeface.MONOSPACE
-                            && tf != Typeface.SANS_SERIF
-                            && tf != Typeface.SERIF) {
-                        param.args[0] = Typeface.DEFAULT;
+                    if (tf == null) return;
+
+                    // Get numeric weight (API 28+) and italic
+                    int weight = tf.getWeight();  // 100-900
+                    boolean italic = tf.isItalic();
+
+                    // Map weight to system Typeface
+                    // Roboto supports: 100,300,400,500,700,900
+                    if (weight <= 150) {
+                        // Thin
+                        param.args[0] = Typeface.create("sans-serif-thin", italic ? Typeface.ITALIC : Typeface.NORMAL);
+                    } else if (weight <= 250) {
+                        // Extra Light
+                        param.args[0] = Typeface.create("sans-serif-thin", italic ? Typeface.ITALIC : Typeface.NORMAL);
+                    } else if (weight <= 350) {
+                        // Light
+                        param.args[0] = Typeface.create("sans-serif-light", italic ? Typeface.ITALIC : Typeface.NORMAL);
+                    } else if (weight <= 450) {
+                        // Regular
+                        param.args[0] = Typeface.create("sans-serif", italic ? Typeface.ITALIC : Typeface.NORMAL);
+                    } else if (weight <= 550) {
+                        // Medium
+                        param.args[0] = Typeface.create("sans-serif-medium", italic ? Typeface.ITALIC : Typeface.NORMAL);
+                    } else if (weight <= 650) {
+                        // SemiBold — Roboto has no semibold, medium is closest
+                        param.args[0] = Typeface.create("sans-serif-medium", italic ? Typeface.ITALIC : Typeface.NORMAL);
+                    } else if (weight <= 750) {
+                        // Bold
+                        param.args[0] = Typeface.create("sans-serif", italic ? Typeface.BOLD_ITALIC : Typeface.BOLD);
+                    } else {
+                        // ExtraBold / Black
+                        param.args[0] = Typeface.create("sans-serif-black", italic ? Typeface.ITALIC : Typeface.NORMAL);
                     }
                 }
             }
