@@ -10,17 +10,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-      - name: Generate gradlew
-        run: gradle wrapper --gradle-version 8.2
-      - name: Build APK
-        run: ./gradlew assembleDebug
-      - uses: actions/upload-artifact@v4
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Upload APK as Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: force-system-font
-          path: app/build/outputs/apk/debug/*.apk
+          tag_name: v1.0
+          name: "Force System Font v1.0"
+          body: "Forces apps to use system font instead of their own "
+          files: app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
