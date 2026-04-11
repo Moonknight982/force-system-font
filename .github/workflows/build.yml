@@ -22,9 +22,14 @@ jobs:
       - name: Upload APK as Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0
-          name: "Force System Font v1.0"
-          body: "Forces apps to use system font instead of their own "
+          tag_name: v2.0
+          name: "Force System Font v2.0"
+          body: |
+           ##Changelog:
+           -**Enhancements:**
+           -Applies system font to most of the app's UI now 
+           with proper variable sytyles. 
+           -More apps support.
           files: app/build/outputs/apk/debug/app-debug.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
