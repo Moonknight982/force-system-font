@@ -2,12 +2,9 @@ package com.mk982.forcesystemfont;
 
 import android.graphics.Typeface;
 import android.os.Build;
-import android.widget.TextView;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.WeakHashMap;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -18,9 +15,55 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static final Map<String, Typeface> cache = new HashMap<>();
     private static final ThreadLocal<Boolean> inHook = ThreadLocal.withInitial(() -> false);
-    
-    // The "Ghost Tagger" - Safely tracks Mono fonts without causing lag
-    private static final Map<Typeface, Boolean> monoTracker = Collections.synchronizedMap(new WeakHashMap<>());
+
+    // Check if a family name string is monospace
+    private static boolean isMonoFamily(String family) {
+        if (family == null) return false;
+        String l = family.toLowerCase();
+        return l.equals("monospace")
+            || l.equals("sans-serif-monospace")
+            || l.equals("serif-monospace")
+            || l.contains("mono")
+            || l.contains("courier")
+            || l.contains("inconsolata")
+            || l.contains("consolas")
+            || l.contains("source code")
+            || l.contains("fira code")
+            || l.contains("jetbrains")
+            || l.contains("hack")
+            || l.contains("cascadia");
+    }
+
+    // Check if a Typeface instance is monospace
+    private static boolean isMonoTypeface(Typeface tf) {
+        if (tf == null) return false;
+        // Direct reference check against system mono constants
+        if (Typeface.MONOSPACE.equals(tf)) return true;
+        // API 28+: reliable check
+        if (Build.VERSION.SDK_INT >= 28) {
+            try {
+                return tf.isMonospace();  // Added in API 35 actually, wrap in try/catch
+            } catch (Throwable ignored) {}
+        }
+        return false;
+    }
+
+    // Check if a file/asset path looks like a monospace font
+    private static boolean isMonoPath(String path) {
+        if (path == null) return false;
+        String l = path.toLowerCase();
+        return l.contains("mono")
+            || l.contains("courier")
+            || l.contains("inconsolata")
+            || l.contains("consolas")
+            || l.contains("sourcecode")
+            || l.contains("source_code")
+            || l.contains("firacode")
+            || l.contains("fira_code")
+            || l.contains("jetbrains")
+            || l.contains("cascadia")
+            || l.contains("hack");
+    }
 
     private static Typeface getSystemTypeface(int weight, boolean italic) {
         String key = weight + "_" + italic;
@@ -41,6 +84,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 else if (weight >= 600) {
                     style = italic ? Typeface.BOLD_ITALIC : Typeface.BOLD;
                 }
+
                 tf = Typeface.create(targetFamily, style);
             }
         } finally {
@@ -87,15 +131,10 @@ public class MainHook implements IXposedHookLoadPackage {
         return (style & Typeface.BOLD) != 0 ? 700 : 400;
     }
 
-    private static boolean isTaggedMono(Typeface tf) {
-        if (tf == null) return false;
-        return tf.equals(Typeface.MONOSPACE) || monoTracker.containsKey(tf);
-    }
-
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
 
-        // HOOK 1: String Creation
+        // HOOK 1: Typeface.create(String family, int style)
         XposedHelpers.findAndHookMethod("android.graphics.Typeface", lpparam.classLoader,
                 "create", String.class, int.class,
                 new XC_MethodHook() {
@@ -103,11 +142,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         if (inHook.get()) return;
                         String family = (String) param.args[0];
-                        
-                        // Let Android build mono natively so italics survive
-                        if (family != null && family.toLowerCase().contains("mono")) return;
-
+                        if (isMonoFamily(family)) return; // passthrough all mono
                         int style = (int) param.args[1];
+
                         boolean italic = (style & Typeface.ITALIC) != 0;
                         int weight = weightFromStyle(style);
 
@@ -121,17 +158,50 @@ public class MainHook implements IXposedHookLoadPackage {
 
                         param.setResult(getSystemTypeface(weight, italic));
                     }
+                });
+
+        // HOOK 2: Typeface.create(Typeface family, int style)
+        XposedHelpers.findAndHookMethod("android.graphics.Typeface", lpparam.classLoader,
+                "create", Typeface.class, int.class,
+                new XC_MethodHook() {
                     @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        String family = (String) param.args[0];
-                        if (family != null && family.toLowerCase().contains("mono")) {
-                            Typeface tf = (Typeface) param.getResult();
-                            if (tf != null) monoTracker.put(tf, true); // Slap the ghost tag on it
-                        }
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (inHook.get()) return;
+                        Typeface baseTf = (Typeface) param.args[0];
+                        if (isMonoTypeface(baseTf)) return; // passthrough all mono styles (bold, italic, bolditalic)
+                        int style = (int) param.args[1];
+
+                        int baseWeight = extractWeight(baseTf);
+                        boolean baseItalic = extractItalic(baseTf);
+
+                        boolean requestedItalic = (style & Typeface.ITALIC) != 0;
+                        boolean requestedBold = (style & Typeface.BOLD) != 0;
+
+                        int finalWeight = requestedBold ? Math.max(baseWeight, 700) : baseWeight;
+                        boolean finalItalic = baseItalic || requestedItalic;
+
+                        param.setResult(getSystemTypeface(finalWeight, finalItalic));
                     }
                 });
 
-        // HOOK 2: Asset Creation (Catches Discord/Reddit custom fonts)
+        // HOOK 3: Typeface.create(Typeface family, int weight, boolean italic) [API 28+]
+        if (Build.VERSION.SDK_INT >= 28) {
+            XposedHelpers.findAndHookMethod("android.graphics.Typeface", lpparam.classLoader,
+                    "create", Typeface.class, int.class, boolean.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            if (inHook.get()) return;
+                            Typeface baseTf = (Typeface) param.args[0];
+                            if (isMonoTypeface(baseTf)) return; // passthrough mono bold, italic, bolditalic
+                            int weight = (int) param.args[1];
+                            boolean italic = (boolean) param.args[2];
+                            param.setResult(getSystemTypeface(weight, italic));
+                        }
+                    });
+        }
+
+        // HOOK 4: Typeface.createFromAsset(AssetManager, String path)
         XposedHelpers.findAndHookMethod("android.graphics.Typeface", lpparam.classLoader,
                 "createFromAsset",
                 android.content.res.AssetManager.class, String.class,
@@ -140,24 +210,14 @@ public class MainHook implements IXposedHookLoadPackage {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         if (inHook.get()) return;
                         String path = (String) param.args[1];
-                        
-                        if (path != null && path.toLowerCase().contains("mono")) return;
-
+                        if (isMonoPath(path)) return; // passthrough all mono asset fonts
                         int weight = inferWeightFromName(path);
                         boolean italic = path != null && (path.toLowerCase().contains("italic") || path.toLowerCase().contains("oblique"));
                         param.setResult(getSystemTypeface(weight, italic));
                     }
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        String path = (String) param.args[1];
-                        if (path != null && path.toLowerCase().contains("mono")) {
-                            Typeface tf = (Typeface) param.getResult();
-                            if (tf != null) monoTracker.put(tf, true); // Slap the ghost tag on it
-                        }
-                    }
                 });
 
-        // HOOK 3: File Creation
+        // HOOK 5: Typeface.createFromFile(String path)
         XposedHelpers.findAndHookMethod("android.graphics.Typeface", lpparam.classLoader,
                 "createFromFile", String.class,
                 new XC_MethodHook() {
@@ -165,24 +225,29 @@ public class MainHook implements IXposedHookLoadPackage {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         if (inHook.get()) return;
                         String path = (String) param.args[0];
-                        
-                        if (path != null && path.toLowerCase().contains("mono")) return;
-
+                        if (isMonoPath(path)) return; // passthrough all mono file fonts
                         int weight = inferWeightFromName(path);
                         boolean italic = path != null && (path.toLowerCase().contains("italic") || path.toLowerCase().contains("oblique"));
                         param.setResult(getSystemTypeface(weight, italic));
                     }
+                });
+
+        // HOOK 6: Paint.setTypeface(Typeface)
+        XposedHelpers.findAndHookMethod("android.graphics.Paint", lpparam.classLoader,
+                "setTypeface", Typeface.class,
+                new XC_MethodHook() {
                     @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        String path = (String) param.args[0];
-                        if (path != null && path.toLowerCase().contains("mono")) {
-                            Typeface tf = (Typeface) param.getResult();
-                            if (tf != null) monoTracker.put(tf, true); // Slap the ghost tag on it
-                        }
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (inHook.get()) return;
+                        Typeface tf = (Typeface) param.args[0];
+                        if (tf == null) return;
+                        if (isMonoTypeface(tf)) return; // passthrough mono in Paint too
+
+                        param.args[0] = getSystemTypeface(extractWeight(tf), extractItalic(tf));
                     }
                 });
 
-        // HOOK 4: The UI Guard (Brings the module back to life!)
+        // HOOK 7: TextView.setTypeface(Typeface)
         XposedHelpers.findAndHookMethod("android.widget.TextView", lpparam.classLoader,
                 "setTypeface", Typeface.class,
                 new XC_MethodHook() {
@@ -190,32 +255,24 @@ public class MainHook implements IXposedHookLoadPackage {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         if (inHook.get()) return;
                         Typeface tf = (Typeface) param.args[0];
-                        
-                        // If it has our ghost tag, let it pass untouched
-                        if (tf == null || isTaggedMono(tf)) return;
-                        
+                        if (tf == null) return;
+                        if (isMonoTypeface(tf)) return; // passthrough mono in TextView
+
                         param.args[0] = getSystemTypeface(extractWeight(tf), extractItalic(tf));
                     }
                 });
 
-        // HOOK 5: Dynamic TextView Styling (The span catcher)
+        // HOOK 8: TextView.setTypeface(Typeface, int style)
         XposedHelpers.findAndHookMethod("android.widget.TextView", lpparam.classLoader,
                 "setTypeface", Typeface.class, int.class,
                 new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         if (inHook.get()) return;
-                        
                         Typeface baseTf = (Typeface) param.args[0];
-                        if (baseTf == null) {
-                            TextView tv = (TextView) param.thisObject;
-                            baseTf = tv.getTypeface();
-                        }
-                        
-                        // If the base text is already a tagged mono, don't wipe it out
-                        if (isTaggedMono(baseTf)) return;
-
+                        if (isMonoTypeface(baseTf)) return; // passthrough mono bolditalic etc in TextView
                         int style = (int) param.args[1];
+
                         int baseWeight = extractWeight(baseTf);
                         boolean baseItalic = extractItalic(baseTf);
 
