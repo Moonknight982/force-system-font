@@ -251,14 +251,29 @@ public class MainHook implements IXposedHookLoadPackage {
                 "createFromAsset",
                 android.content.res.AssetManager.class, String.class,
                 new XC_MethodHook() {
+                    private final ThreadLocal<Boolean> wasMono = ThreadLocal.withInitial(() -> false);
+
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         if (inHook.get()) return;
                         String path = (String) param.args[1];
-                        if (isMonoPath(path)) return; // passthrough all mono asset fonts
+                        if (isMonoPath(path)) {
+                            wasMono.set(true);
+                            return; // passthrough all mono asset fonts
+                        }
+                        wasMono.set(false);
                         int weight = inferWeightFromName(path);
                         boolean italic = path != null && (path.toLowerCase().contains("italic") || path.toLowerCase().contains("oblique"));
                         param.setResult(getSystemTypeface(weight, italic));
+                    }
+
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        if (wasMono.get()) {
+                            Typeface result = (Typeface) param.getResult();
+                            if (result != null) monoTypefaces.add(result);
+                            wasMono.set(false);
+                        }
                     }
                 });
 
@@ -266,14 +281,29 @@ public class MainHook implements IXposedHookLoadPackage {
         XposedHelpers.findAndHookMethod("android.graphics.Typeface", lpparam.classLoader,
                 "createFromFile", String.class,
                 new XC_MethodHook() {
+                    private final ThreadLocal<Boolean> wasMono = ThreadLocal.withInitial(() -> false);
+
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         if (inHook.get()) return;
                         String path = (String) param.args[0];
-                        if (isMonoPath(path)) return; // passthrough all mono file fonts
+                        if (isMonoPath(path)) {
+                            wasMono.set(true);
+                            return; // passthrough all mono file fonts
+                        }
+                        wasMono.set(false);
                         int weight = inferWeightFromName(path);
                         boolean italic = path != null && (path.toLowerCase().contains("italic") || path.toLowerCase().contains("oblique"));
                         param.setResult(getSystemTypeface(weight, italic));
+                    }
+
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        if (wasMono.get()) {
+                            Typeface result = (Typeface) param.getResult();
+                            if (result != null) monoTypefaces.add(result);
+                            wasMono.set(false);
+                        }
                     }
                 });
 
