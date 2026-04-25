@@ -37,15 +37,9 @@ public class MainHook implements IXposedHookLoadPackage {
     // Check if a Typeface instance is monospace
     private static boolean isMonoTypeface(Typeface tf) {
         if (tf == null) return false;
-        // Direct reference check against system mono constants
-        if (Typeface.MONOSPACE.equals(tf)) return true;
-        // API 28+: reliable check
-        if (Build.VERSION.SDK_INT >= 28) {
-            try {
-                return tf.isMonospace();  // Added in API 35 actually, wrap in try/catch
-            } catch (Throwable ignored) {}
-        }
-        return false;
+        // Direct reference check against system mono constant — covers all styles
+        // (bold mono, italic mono, bolditalic mono all derive from MONOSPACE)
+        return Typeface.MONOSPACE.equals(tf);
     }
 
     // Check if a file/asset path looks like a monospace font
