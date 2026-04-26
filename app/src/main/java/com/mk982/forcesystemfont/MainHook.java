@@ -228,9 +228,33 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 });
 
-        // HOOK 6 (Paint.setTypeface) REMOVED — fires during active text rendering/shaping,
-        // causes IndexOutOfBoundsException in font shaper when typeface is swapped mid-render.
-        // TextView hooks below are sufficient and fire safely at setup time.
+        // HOOK 6: Paint.setTypeface — safety net for anything that slips past earlier hooks
+        XposedHelpers.findAndHookMethod("android.graphics.Paint", lpparam.classLoader,
+                "setTypeface", Typeface.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (inHook.get()) return;
+                        Typeface tf = (Typeface) param.args[0];
+                        if (tf == null) return;
+                        if (isMonoTypeface(tf)) return;
+
+                        int weight = 400;
+                        boolean italic = false;
+                        try {
+                            if (Build.VERSION.SDK_INT >= 28) {
+                                weight = tf.getWeight();
+                                italic = tf.isItalic();
+                            } else {
+                                int style = tf.getStyle();
+                                italic = (style & Typeface.ITALIC) != 0;
+                                weight = (style & Typeface.BOLD) != 0 ? 700 : 400;
+                            }
+                        } catch (Throwable ignored) {}
+
+                        param.args[0] = getSystemTypeface(weight, italic);
+                    }
+                });
 
         // HOOK 7: TextView.setTypeface(Typeface)
         XposedHelpers.findAndHookMethod("android.widget.TextView", lpparam.classLoader,
