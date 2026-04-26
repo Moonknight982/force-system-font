@@ -1,5 +1,6 @@
 package com.mk982.forcesystemfont;
 
+import android.content.Context;
 import android.graphics.Typeface;
 import android.os.Build;
 
@@ -361,5 +362,29 @@ public class MainHook implements IXposedHookLoadPackage {
                         param.args[1] = finalItalic ? Typeface.ITALIC : Typeface.NORMAL;
                     }
                 });
+        // HOOK 9: ResourcesCompat.getFont() — catches XML font resources (@font/jetbrains_mono etc.)
+        // Apps using font XML declarations never go through createFromAsset, so hooks 4/5 miss them entirely
+        try {
+            XposedHelpers.findAndHookMethod("androidx.core.content.res.ResourcesCompat", lpparam.classLoader,
+                    "getFont", Context.class, int.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            Typeface result = (Typeface) param.getResult();
+                            if (result == null) return;
+                            try {
+                                Context ctx = (Context) param.args[0];
+                                int resId = (int) param.args[1];
+                                String resName = ctx.getResources().getResourceEntryName(resId);
+                                if (isMonoFamily(resName) || isMonoPath(resName)) {
+                                    monoTypefaces.add(result);
+                                    // Also register any typeface this one was derived from
+                                }
+                            } catch (Throwable ignored) {}
+                        }
+                    });
+        } catch (Throwable ignored) {
+            // androidx not present in this app, skip silently
+        }
     }
 }
