@@ -370,7 +370,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 });
 
-        // HOOK 9: ResourcesCompat.getFont() — catches XML font resources (@font/jetbrains_mono etc.)
+        // HOOK 9: ResourcesCompat.getFont() — catches XML font resources
         try {
             XposedHelpers.findAndHookMethod("androidx.core.content.res.ResourcesCompat", lpparam.classLoader,
                     "getFont", Context.class, int.class,
@@ -396,6 +396,81 @@ public class MainHook implements IXposedHookLoadPackage {
                     });
         } catch (Throwable e) {
             log("[H9] hook failed (androidx absent?): " + e.getMessage());
+        }
+
+        // HOOK 10: Typeface.Builder — Compose's font loading path (API 29+)
+        // Compose bypasses all createFromAsset/create paths and uses Typeface.Builder directly
+        if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                // Builder(AssetManager, String path)
+                XposedHelpers.findAndHookConstructor("android.graphics.Typeface.Builder", lpparam.classLoader,
+                        android.content.res.AssetManager.class, String.class,
+                        new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                String path = (String) param.args[1];
+                                log("[H10] Typeface.Builder(asset) path='" + path + "' isMono=" + isMonoPath(path));
+                                if (isMonoPath(path)) {
+                                    XposedHelpers.setAdditionalInstanceField(param.thisObject, "isMono", true);
+                                }
+                            }
+                        });
+
+                // Builder(Resources, int resId)
+                XposedHelpers.findAndHookConstructor("android.graphics.Typeface.Builder", lpparam.classLoader,
+                        android.content.res.Resources.class, int.class,
+                        new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                try {
+                                    android.content.res.Resources res = (android.content.res.Resources) param.args[0];
+                                    int resId = (int) param.args[1];
+                                    String resName = res.getResourceEntryName(resId);
+                                    log("[H10] Typeface.Builder(res) resName='" + resName + "' isMono=" + (isMonoFamily(resName) || isMonoPath(resName)));
+                                    if (isMonoFamily(resName) || isMonoPath(resName)) {
+                                        XposedHelpers.setAdditionalInstanceField(param.thisObject, "isMono", true);
+                                    }
+                                } catch (Throwable e) {
+                                    log("[H10] Builder(res) error: " + e.getMessage());
+                                }
+                            }
+                        });
+
+                // Builder(File)
+                XposedHelpers.findAndHookConstructor("android.graphics.Typeface.Builder", lpparam.classLoader,
+                        java.io.File.class,
+                        new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                java.io.File file = (java.io.File) param.args[0];
+                                String path = file != null ? file.getName() : null;
+                                log("[H10] Typeface.Builder(file) path='" + path + "' isMono=" + isMonoPath(path));
+                                if (isMonoPath(path)) {
+                                    XposedHelpers.setAdditionalInstanceField(param.thisObject, "isMono", true);
+                                }
+                            }
+                        });
+
+                // build() — register result if builder was tagged as mono
+                XposedHelpers.findAndHookMethod("android.graphics.Typeface.Builder", lpparam.classLoader,
+                        "build",
+                        new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                Boolean isMono = (Boolean) XposedHelpers.getAdditionalInstanceField(param.thisObject, "isMono");
+                                if (Boolean.TRUE.equals(isMono)) {
+                                    Typeface result = (Typeface) param.getResult();
+                                    if (result != null) {
+                                        monoTypefaces.add(result);
+                                        log("[H10] build() registered mono tf=" + result + " setSize=" + monoTypefaces.size());
+                                    }
+                                }
+                            }
+                        });
+
+            } catch (Throwable e) {
+                log("[H10] Typeface.Builder hook failed: " + e.getMessage());
+            }
         }
     }
 }
