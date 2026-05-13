@@ -3,6 +3,7 @@ name: Build APK
 on:
   push:
     branches: [ main ]
+    branches: [pre-release]
   release:
     types: [ created ]
   workflow_dispatch:

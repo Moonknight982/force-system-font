@@ -1,3 +1,4 @@
+
 package com.mk982.forcesystemfont;
 
 import android.graphics.Typeface;
@@ -73,7 +74,7 @@ public class MainHook implements IXposedHookLoadPackage {
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
 
-        // --- 1. THE MODERN BUILDER HOOK (Catches Medium weight custom fonts) ---
+        // --- 1. THE MODERN BUILDER HOOK (Catches custom fonts with Medium weights) ---
         XposedHelpers.findAndHookMethod("android.graphics.Typeface$Builder", lpparam.classLoader,
                 "build", new XC_MethodHook() {
                     @Override
@@ -84,18 +85,13 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 });
 
-        // --- 2. TYPEFACE.CREATE OVERLOADS (API 34+ Support) ---
+        // --- 2. TYPEFACE.CREATE OVERLOADS (Supports API 28 and API 34+) ---
         XC_MethodHook createHook = new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
                 if (inHook.get()) return;
-                int weight = 400;
-                boolean italic = false;
-
-                if (param.args[1] instanceof Integer && param.args[2] instanceof Boolean) {
-                    weight = (int) param.args[1];
-                    italic = (boolean) param.args[2];
-                }
+                int weight = (int) param.args[1];
+                boolean italic = (boolean) param.args[2];
                 param.setResult(getSystemTypeface(weight, italic));
             }
         };
@@ -131,7 +127,7 @@ public class MainHook implements IXposedHookLoadPackage {
         XposedHelpers.findAndHookMethod(Typeface.class, "createFromAsset", android.content.res.AssetManager.class, String.class, pathHook);
         XposedHelpers.findAndHookMethod(Typeface.class, "createFromFile", String.class, pathHook);
 
-        // --- 5. TEXTVIEW SAFETY NET ---
+        // --- 5. TEXTVIEW SAFETY NET (With Reflection Fix) ---
         XposedHelpers.findAndHookMethod(TextView.class, "setTypeface", Typeface.class, int.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
@@ -141,9 +137,17 @@ public class MainHook implements IXposedHookLoadPackage {
                 int style = (int) param.args[1];
 
                 int weight = extractWeight(tf);
-                if (Build.VERSION.SDK_INT >= 28 && tv.getTextFontWeight() != -1) {
-                    weight = tv.getTextFontWeight(); // Respect XML-defined weights like 500
+                
+                // Reflection to avoid compilation errors on older SDK targets
+                if (Build.VERSION.SDK_INT >= 28) {
+                    try {
+                        int textWeight = (int) XposedHelpers.callMethod(tv, "getTextFontWeight");
+                        if (textWeight != -1) {
+                            weight = textWeight;
+                        }
+                    } catch (Throwable ignored) {}
                 }
+
                 if ((style & Typeface.BOLD) != 0) weight = Math.max(weight, 700);
 
                 param.args[0] = getSystemTypeface(weight, (style & Typeface.ITALIC) != 0 || extractItalic(tf));
