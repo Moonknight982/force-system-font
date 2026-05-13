@@ -2,12 +2,10 @@ package com.mk982.forcesystemfont;
 
 import android.graphics.Typeface;
 import android.os.Build;
+import android.widget.TextView;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
-import java.util.WeakHashMap;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -18,21 +16,6 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static final Map<String, Typeface> cache = new HashMap<>();
     private static final ThreadLocal<Boolean> inHook = ThreadLocal.withInitial(() -> false);
-    private static final Set<Typeface> monoTypefaces = Collections.newSetFromMap(new WeakHashMap<>());
-
-    private static boolean isMonoFamily(String family) {
-        if (family == null) return false;
-        String l = family.toLowerCase();
-        return l.equals("monospace")
-            || l.equals("sans-serif-monospace")
-            || l.equals("serif-monospace");
-    }
-
-    private static boolean isMonoTypeface(Typeface tf) {
-        if (tf == null) return false;
-        if (Typeface.MONOSPACE.equals(tf)) return true;
-        return monoTypefaces.contains(tf);
-    }
 
     private static Typeface getSystemTypeface(int weight, boolean italic) {
         String key = weight + "_" + italic;
@@ -42,15 +25,17 @@ public class MainHook implements IXposedHookLoadPackage {
         inHook.set(true);
         try {
             if (Build.VERSION.SDK_INT >= 28) {
+                // Directly create with specific weight on modern Android
                 tf = Typeface.create(Typeface.DEFAULT, weight, italic);
             } else {
-                String targetFamily = "sans-serif";
+                // Legacy mapping for older Android versions
+                String family = "sans-serif";
                 int style = italic ? Typeface.ITALIC : Typeface.NORMAL;
-                if (weight <= 200)      { targetFamily = "sans-serif-thin"; }
-                else if (weight <= 300) { targetFamily = "sans-serif-light"; }
-                else if (weight <= 550) { targetFamily = "sans-serif-medium"; }
-                else if (weight >= 600) { style = italic ? Typeface.BOLD_ITALIC : Typeface.BOLD; }
-                tf = Typeface.create(targetFamily, style);
+                if (weight <= 200) family = "sans-serif-thin";
+                else if (weight <= 300) family = "sans-serif-light";
+                else if (weight <= 550) family = "sans-serif-medium";
+                else if (weight >= 600) style = italic ? Typeface.BOLD_ITALIC : Typeface.BOLD;
+                tf = Typeface.create(family, style);
             }
         } finally {
             inHook.set(false);
@@ -60,235 +45,110 @@ public class MainHook implements IXposedHookLoadPackage {
         return tf;
     }
 
-    private static int inferWeightFromName(String name) {
-        if (name == null) return 400;
-        String l = name.toLowerCase();
-        if (l.contains("black") || l.contains("extrabold") || l.contains("heavy")) return 900;
-        if (l.contains("semibold") || l.contains("demibold") || l.contains("demi")) return 600;
-        if (l.contains("bold"))   return 700;
-        if (l.contains("medium")) return 500;
-        if (l.contains("light"))  return 300;
-        if (l.contains("thin") || l.contains("extralight") || l.contains("hairline")) return 100;
-        return 400;
-    }
-
     private static int extractWeight(Typeface tf) {
         if (tf == null) return 400;
-        try {
-            if (Build.VERSION.SDK_INT >= 28) return tf.getWeight();
-            return (tf.getStyle() & Typeface.BOLD) != 0 ? 700 : 400;
-        } catch (Throwable ignored) { return 400; }
+        if (Build.VERSION.SDK_INT >= 28) return tf.getWeight();
+        return (tf.getStyle() & Typeface.BOLD) != 0 ? 700 : 400;
     }
 
     private static boolean extractItalic(Typeface tf) {
         if (tf == null) return false;
-        try {
-            if (Build.VERSION.SDK_INT >= 28) return tf.isItalic();
-            return (tf.getStyle() & Typeface.ITALIC) != 0;
-        } catch (Throwable ignored) { return false; }
+        if (Build.VERSION.SDK_INT >= 28) return tf.isItalic();
+        return (tf.getStyle() & Typeface.ITALIC) != 0;
     }
 
-    private static int weightFromStyle(int style) {
-        return (style & Typeface.BOLD) != 0 ? 700 : 400;
+    private static int inferWeight(String path) {
+        if (path == null) return 400;
+        String l = path.toLowerCase();
+        if (l.contains("black") || l.contains("heavy")) return 900;
+        if (l.contains("extrabold")) return 800;
+        if (l.contains("bold")) return 700;
+        if (l.contains("semibold") || l.contains("demi")) return 600;
+        if (l.contains("medium")) return 500;
+        if (l.contains("light")) return 300;
+        if (l.contains("thin") || l.contains("hairline")) return 100;
+        return 400;
     }
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
 
-        // HOOK 1: Typeface.create(String family, int style)
-        XposedHelpers.findAndHookMethod("android.graphics.Typeface", lpparam.classLoader,
-                "create", String.class, int.class,
-                new XC_MethodHook() {
-                    private final ThreadLocal<Boolean> wasMono = ThreadLocal.withInitial(() -> false);
-
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        if (inHook.get()) return;
-                        String family = (String) param.args[0];
-                        if (isMonoFamily(family)) {
-                            wasMono.set(true);
-                            return;
-                        }
-                        wasMono.set(false);
-                        int style = (int) param.args[1];
-                        boolean italic = (style & Typeface.ITALIC) != 0;
-                        int weight = weightFromStyle(style);
-                        if (family != null) {
-                            String lf = family.toLowerCase();
-                            if (lf.contains("medium"))     weight = 500;
-                            else if (lf.contains("light")) weight = 300;
-                            else if (lf.contains("thin"))  weight = 100;
-                            else if (lf.contains("black")) weight = 900;
-                        }
-                        param.setResult(getSystemTypeface(weight, italic));
-                    }
-
+        // --- 1. THE MODERN BUILDER HOOK (Catches Medium weight custom fonts) ---
+        XposedHelpers.findAndHookMethod("android.graphics.Typeface$Builder", lpparam.classLoader,
+                "build", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        if (wasMono.get()) {
-                            Typeface result = (Typeface) param.getResult();
-                            if (result != null) monoTypefaces.add(result);
-                            wasMono.set(false);
-                        }
+                        Typeface original = (Typeface) param.getResult();
+                        if (original == null || inHook.get()) return;
+                        param.setResult(getSystemTypeface(extractWeight(original), extractItalic(original)));
                     }
                 });
 
-        // HOOK 2: Typeface.create(Typeface family, int style)
-        XposedHelpers.findAndHookMethod("android.graphics.Typeface", lpparam.classLoader,
-                "create", Typeface.class, int.class,
-                new XC_MethodHook() {
-                    private final ThreadLocal<Boolean> wasMono = ThreadLocal.withInitial(() -> false);
+        // --- 2. TYPEFACE.CREATE OVERLOADS (API 34+ Support) ---
+        XC_MethodHook createHook = new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                if (inHook.get()) return;
+                int weight = 400;
+                boolean italic = false;
 
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        if (inHook.get()) return;
-                        Typeface baseTf = (Typeface) param.args[0];
-                        if (isMonoTypeface(baseTf)) {
-                            wasMono.set(true);
-                            return;
-                        }
-                        wasMono.set(false);
-                        int style = (int) param.args[1];
-                        int baseWeight = extractWeight(baseTf);
-                        boolean baseItalic = extractItalic(baseTf);
-                        boolean reqItalic = (style & Typeface.ITALIC) != 0;
-                        boolean reqBold   = (style & Typeface.BOLD)   != 0;
-                        int finalWeight = reqBold ? Math.max(baseWeight, 700) : baseWeight;
-                        boolean finalItalic = baseItalic || reqItalic;
-                        param.setResult(getSystemTypeface(finalWeight, finalItalic));
-                    }
+                if (param.args[1] instanceof Integer && param.args[2] instanceof Boolean) {
+                    weight = (int) param.args[1];
+                    italic = (boolean) param.args[2];
+                }
+                param.setResult(getSystemTypeface(weight, italic));
+            }
+        };
 
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        if (wasMono.get()) {
-                            Typeface result = (Typeface) param.getResult();
-                            if (result != null) monoTypefaces.add(result);
-                            wasMono.set(false);
-                        }
-                    }
-                });
-
-        // HOOK 3: Typeface.create(Typeface family, int weight, boolean italic) [API 28+]
         if (Build.VERSION.SDK_INT >= 28) {
-            XposedHelpers.findAndHookMethod("android.graphics.Typeface", lpparam.classLoader,
-                    "create", Typeface.class, int.class, boolean.class,
-                    new XC_MethodHook() {
-                        private final ThreadLocal<Boolean> wasMono = ThreadLocal.withInitial(() -> false);
-
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            if (inHook.get()) return;
-                            Typeface baseTf = (Typeface) param.args[0];
-                            if (isMonoTypeface(baseTf)) {
-                                wasMono.set(true);
-                                return;
-                            }
-                            wasMono.set(false);
-                            int weight = (int) param.args[1];
-                            boolean italic = (boolean) param.args[2];
-                            param.setResult(getSystemTypeface(weight, italic));
-                        }
-
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            if (wasMono.get()) {
-                                Typeface result = (Typeface) param.getResult();
-                                if (result != null) monoTypefaces.add(result);
-                                wasMono.set(false);
-                            }
-                        }
-                    });
+            XposedHelpers.findAndHookMethod(Typeface.class, "create", Typeface.class, int.class, boolean.class, createHook);
+        }
+        if (Build.VERSION.SDK_INT >= 34) {
+            XposedHelpers.findAndHookMethod(Typeface.class, "create", String.class, int.class, boolean.class, createHook);
         }
 
-        // HOOK 4: Typeface.createFromAsset(AssetManager, String path)
-        XposedHelpers.findAndHookMethod("android.graphics.Typeface", lpparam.classLoader,
-                "createFromAsset", android.content.res.AssetManager.class, String.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        if (inHook.get()) return;
-                        String path = (String) param.args[1];
-                        int weight = inferWeightFromName(path);
-                        boolean italic = path != null && (path.toLowerCase().contains("italic") || path.toLowerCase().contains("oblique"));
-                        param.setResult(getSystemTypeface(weight, italic));
-                    }
-                });
+        // --- 3. LEGACY CREATE HOOKS ---
+        XposedHelpers.findAndHookMethod(Typeface.class, "create", String.class, int.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                if (inHook.get()) return;
+                String family = (String) param.args[0];
+                int style = (int) param.args[1];
+                int weight = (style & Typeface.BOLD) != 0 ? 700 : inferWeight(family);
+                param.setResult(getSystemTypeface(weight, (style & Typeface.ITALIC) != 0));
+            }
+        });
 
-        // HOOK 5: Typeface.createFromFile(String path)
-        XposedHelpers.findAndHookMethod("android.graphics.Typeface", lpparam.classLoader,
-                "createFromFile", String.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        if (inHook.get()) return;
-                        String path = (String) param.args[0];
-                        int weight = inferWeightFromName(path);
-                        boolean italic = path != null && (path.toLowerCase().contains("italic") || path.toLowerCase().contains("oblique"));
-                        param.setResult(getSystemTypeface(weight, italic));
-                    }
-                });
+        // --- 4. FILE & ASSET HOOKS ---
+        XC_MethodHook pathHook = new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                if (inHook.get()) return;
+                String path = (param.args.length > 1) ? (String) param.args[1] : (String) param.args[0];
+                param.setResult(getSystemTypeface(inferWeight(path), path != null && path.toLowerCase().contains("italic")));
+            }
+        };
+        XposedHelpers.findAndHookMethod(Typeface.class, "createFromAsset", android.content.res.AssetManager.class, String.class, pathHook);
+        XposedHelpers.findAndHookMethod(Typeface.class, "createFromFile", String.class, pathHook);
 
-        // HOOK 6: Paint.setTypeface — safety net for anything that slips past earlier hooks
-        XposedHelpers.findAndHookMethod("android.graphics.Paint", lpparam.classLoader,
-                "setTypeface", Typeface.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        if (inHook.get()) return;
-                        Typeface tf = (Typeface) param.args[0];
-                        if (tf == null) return;
-                        if (isMonoTypeface(tf)) return;
+        // --- 5. TEXTVIEW SAFETY NET ---
+        XposedHelpers.findAndHookMethod(TextView.class, "setTypeface", Typeface.class, int.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                if (inHook.get()) return;
+                TextView tv = (TextView) param.thisObject;
+                Typeface tf = (Typeface) param.args[0];
+                int style = (int) param.args[1];
 
-                        int weight = 400;
-                        boolean italic = false;
-                        try {
-                            if (Build.VERSION.SDK_INT >= 28) {
-                                weight = tf.getWeight();
-                                italic = tf.isItalic();
-                            } else {
-                                int style = tf.getStyle();
-                                italic = (style & Typeface.ITALIC) != 0;
-                                weight = (style & Typeface.BOLD) != 0 ? 700 : 400;
-                            }
-                        } catch (Throwable ignored) {}
+                int weight = extractWeight(tf);
+                if (Build.VERSION.SDK_INT >= 28 && tv.getTextFontWeight() != -1) {
+                    weight = tv.getTextFontWeight(); // Respect XML-defined weights like 500
+                }
+                if ((style & Typeface.BOLD) != 0) weight = Math.max(weight, 700);
 
-                        param.args[0] = getSystemTypeface(weight, italic);
-                    }
-                });
-
-        // HOOK 7: TextView.setTypeface(Typeface)
-        XposedHelpers.findAndHookMethod("android.widget.TextView", lpparam.classLoader,
-                "setTypeface", Typeface.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        if (inHook.get()) return;
-                        Typeface tf = (Typeface) param.args[0];
-                        if (tf == null) return;
-                        if (isMonoTypeface(tf)) return;
-                        param.args[0] = getSystemTypeface(extractWeight(tf), extractItalic(tf));
-                    }
-                });
-
-        // HOOK 8: TextView.setTypeface(Typeface, int style)
-        XposedHelpers.findAndHookMethod("android.widget.TextView", lpparam.classLoader,
-                "setTypeface", Typeface.class, int.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        if (inHook.get()) return;
-                        Typeface baseTf = (Typeface) param.args[0];
-                        if (isMonoTypeface(baseTf)) return;
-                        int style = (int) param.args[1];
-                        int baseWeight = extractWeight(baseTf);
-                        boolean baseItalic = extractItalic(baseTf);
-                        boolean reqItalic = (style & Typeface.ITALIC) != 0;
-                        boolean reqBold   = (style & Typeface.BOLD)   != 0;
-                        int finalWeight = reqBold ? Math.max(baseWeight, 700) : baseWeight;
-                        boolean finalItalic = baseItalic || reqItalic;
-                        param.args[0] = getSystemTypeface(finalWeight, finalItalic);
-                        param.args[1] = finalItalic ? Typeface.ITALIC : Typeface.NORMAL;
-                    }
-                });
+                param.args[0] = getSystemTypeface(weight, (style & Typeface.ITALIC) != 0 || extractItalic(tf));
+                param.args[1] = extractItalic((Typeface) param.args[0]) ? Typeface.ITALIC : Typeface.NORMAL;
+            }
+        });
     }
 }
